@@ -28,6 +28,9 @@ import pandas as pd
 import xarray as xr
 import yaml
 
+# Values at or above this magnitude are treated as missing on load (undeclared fill values)
+UNDECLARED_FILL_THRESHOLD = 1e19
+
 # Keys that may be set at model level and overridden per scenario
 MERGE_KEYS = ("member_labels", "file_vars", "tables", "unit_scale", "time_fix",
               "anon", "format", "path", "path_overrides", "roles_used")
@@ -216,18 +219,38 @@ def expected_files(cfg: dict, models=None, scenarios=None) -> pd.DataFrame:
     return pd.DataFrame(rows).reindex(columns=cols)
 
 
-def check_existence(df: pd.DataFrame, workers: int = 16) -> pd.DataFrame:
+def check_existence(df: pd.DataFrame, workers: int = 16, verbose: bool = False,
+                    slow_s: float = 10.0) -> pd.DataFrame:
     """Resolve each pattern; set status present/missing, add files, n_files, size_bytes.
-    For zarr, only the last match (latest version) is used."""
-    from concurrent.futures import ThreadPoolExecutor
+    For zarr, only the last match (latest version) is used.
+    verbose: print progress, and every pattern that takes longer than slow_s seconds."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     df = df.copy()
-    todo = df.index[df["status"] == "expected"]
+    todo = list(df.index[df["status"] == "expected"])
+
+    def timed(i):
+        t0 = time.perf_counter()
+        return i, resolve(df.at[i, "pattern"], df.at[i, "anon"]), time.perf_counter() - t0
+
+    hits, t_start = {}, time.perf_counter()
     with ThreadPoolExecutor(workers) as ex:
-        hits = list(ex.map(lambda i: resolve(df.at[i, "pattern"], df.at[i, "anon"]), todo))
+        futures = [ex.submit(timed, i) for i in todo]
+        for k, fut in enumerate(as_completed(futures), 1):
+            i, h, secs = fut.result()
+            hits[i] = h
+            if verbose and secs > slow_s:
+                print(f"  slow ({secs:.0f}s): {df.at[i, 'model']} {df.at[i, 'scenario']} "
+                      f"{df.at[i, 'var']} {df.at[i, 'member']}  {df.at[i, 'pattern']}", flush=True)
+            if verbose and (k % 25 == 0 or k == len(todo)):
+                print(f"  resolved {k}/{len(todo)} patterns in {time.perf_counter() - t_start:.0f}s",
+                      flush=True)
+
     df["files"] = None
     df["n_files"] = 0
     df["size_bytes"] = np.nan
-    for i, h in zip(todo, hits):
+    for i in todo:
+        h = hits[i]
         if df.at[i, "format"] == "zarr":
             h = h[-1:]
         df.at[i, "files"] = [p for p, _ in h]
@@ -380,6 +403,7 @@ def chunk_like_storage(da: xr.DataArray, chunks="auto") -> xr.DataArray:
 def standardise(parts: list[xr.Dataset], row, chunks=None) -> xr.Dataset:
     """Combine a member's parts into one dataset with:
     time fix applied, duplicates removed (first kept), time sorted,
+    undeclared fill values (|x| >= 1e19) set to NaN,
     the data variable renamed to row['var'], units scaled, dim named 'time'.
     chunks: None (no dask), "auto" (aligned with storage), or a dict."""
     var, file_var = row["var"], row.get("file_var") or row["var"]
@@ -398,6 +422,12 @@ def standardise(parts: list[xr.Dataset], row, chunks=None) -> xr.Dataset:
         fixed, dim="time", data_vars="minimal", coords="minimal", compat="override")
     _, keep = np.unique(ds.time.values, return_index=True)
     ds = ds.isel(time=np.sort(keep)).sortby("time")
+    # Undeclared fill values (no _FillValue/missing_value attribute), e.g. the netCDF
+    # default 9.97e36 in the UKESM G6-1.5K-SAI files, survive decoding as real numbers.
+    # No physical field here comes near 1e19, so anything that large is missing.
+    attrs = dict(ds[var].attrs)
+    ds[var] = ds[var].where(abs(ds[var]) < UNDECLARED_FILL_THRESHOLD)
+    ds[var].attrs = attrs
     scale = float(row.get("unit_scale") or 1.0)
     if scale != 1.0:
         attrs = dict(ds[var].attrs)
