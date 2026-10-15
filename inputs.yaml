@@ -1,0 +1,190 @@
+# =====================================================================
+# Time-of-emergence pipeline: input configuration
+#
+# Every path the pipeline reads is defined here. Notebooks never
+# hard-code paths; they go through toe.inputs.
+#
+# Path templates take these fields:
+#   {root}          storage.root
+#   {model}         model key
+#   {var}           CMOR-style variable name used in the pipeline
+#   {file_var}      name used in the path/file (file_vars, default {var})
+#   {table}         tables[<var>] (default empty)
+#   {member}        canonical member id (r1, r2, ... or r01, ...)
+#   {member_label}  member_labels[<member>] (default {member})
+# A template may contain glob wildcards (*): every matching file is part
+# of that member. Overlapping time steps across files are de-duplicated
+# (first occurrence kept) and reported by the checker.
+#
+# Settings at model level apply to all its scenarios; the same keys
+# under a scenario override them (dicts are merged key by key):
+#   member_labels, file_vars, tables, unit_scale, time_fix, anon,
+#   format, path, path_overrides, roles_used
+#
+# time_fix:   none | center_of_bounds  (CAM h0 output is stamped at the
+#             end of the averaging period)
+# unit_scale: multiply on load, e.g. PRECT m/s -> kg m-2 s-1 is 1000
+# anon:       true for public buckets (no credentials)
+# format:     netcdf (default) | zarr
+# roles_used: restrict the roles a scenario must provide
+# =====================================================================
+
+storage:
+  root: s3://reflective-persistent-prod-large
+
+run:
+  models: [UKESM1-1, MIROC-ES2H, CESM2-WACCM, E3SMv3]
+  scenarios: [ssp245, G6-1.5K-HiLLA, G6-1.5K-SAI, historical]
+
+scenarios:
+  ssp245:        {kind: baseline}
+  G6-1.5K-HiLLA: {kind: sai, baseline: ssp245}
+  G6-1.5K-SAI:   {kind: sai, baseline: ssp245}
+  historical:    {kind: historical, used_in: [spatial], models: [CESM2-WACCM]}
+
+# Analysis role -> variable (overridable per model via role_overrides).
+roles:
+  gmsat:  tas
+  precip: pr
+  sst:    tos
+  seaice: siconc
+
+# Grid each variable sits on (overridable per model via variable_grids).
+#   siconc  = ocean-grid sea-ice concentration
+#   siconca = atmosphere-grid sea-ice fraction (UKESM siconca, CESM ICEFRAC)
+variable_grids:
+  tas: atmos
+  pr: atmos
+  ts: atmos
+  tos: ocean
+  siconc: ocean
+  siconca: atmos
+
+# Plausibility checks (applied after unit_scale). Range is checked on the
+# first and last time step of each member.
+variable_checks:
+  tas:     {units: [K],                        range: [170, 340]}
+  ts:      {units: [K],                        range: [170, 350]}
+  tos:     {units: [degC, "°C", K],             range: [-5, 310]}
+  pr:      {units: ["kg m-2 s-1", "kg/m2/s"],  range: [0, 0.01]}
+  siconc:  {units: ["%", "1", fraction],       range: [0, 100]}
+  siconca: {units: ["%", "1", fraction],       range: [0, 100]}
+
+fx_checks:
+  # Expected global sums (m2) and relative tolerance
+  areacella: {expected_sum: 5.10e+14, rtol: 0.01}
+  areacello: {expected_sum: 3.61e+14, rtol: 0.08}
+
+# =====================================================================
+# Models
+# =====================================================================
+models:
+
+  UKESM1-1:
+    members: [r1, r2, r3]
+    pairing: by_member_index
+    role_overrides: {sst: ts, seaice: siconca}
+    fx:
+      areacella: ~/shared/Data/model_grids_fx/areacella_fx_UKESM1-0-LL_piControl_r1i1p1f2_gn.nc
+      sftlf:     ~/shared/Data/model_grids_fx/sftlf_fx_UKESM1-0-LL_piControl_r1i1p1f2_gn.nc
+    fx_provenance:
+      areacella: "UKESM1-0-LL: assumed same N96 grid as UKESM1-1"
+      sftlf:     "UKESM1-0-LL: assumed same land-sea mask as UKESM1-1"
+    tables: {tas: Amon, pr: Amon, ts: Amon, siconca: SImon}
+    scenarios:
+      ssp245:
+        member_labels: {r1: r12i1p1f1, r2: r2i1p1f1, r3: r3i1p1f1}
+        path: "{root}/UKESM1-1/SSP245/{member_label}/ap5/{table}/{file_var}/*.nc"
+      G6-1.5K-HiLLA:
+        member_labels: {r1: r12i1p1f2, r2: r2i1p1f2, r3: r3i1p1f2}
+        path: "{root}/UKESM1-1/G6-1p5K-HiLLA/{member_label}/apm/{table}/{file_var}/*.nc"
+      G6-1.5K-SAI:
+        member_labels: {r1: r12i1p1f2, r2: r2i1p1f2, r3: r3i1p1f2}   # r2, r3 assumed
+        path: "{root}/UKESM1-1/G6-1.5K-SAI/{member_label}/mon/{file_var}/*.nc"
+
+  MIROC-ES2H:
+    members: [r01, r02, r03, r04, r05, r06, r07, r08, r09, r10]
+    pairing: by_member_index
+    role_overrides: {sst: ts}
+    fx:
+      areacella: ~/shared/Data/model_grids_fx/areacella_fx_MIROC6_historical_r1i1p1f1_gn.nc
+      areacello: ~/shared/Data/model_grids_fx/areacello_Ofx_MIROC-ES2L_esm-piControl_r1i1p1f2_gn.nc
+      sftlf:     ~/shared/Data/model_grids_fx/sftlf_fx_MIROC6_piControl_r1i1p1f1_gn.nc
+    fx_provenance:
+      areacella: "MIROC6: assumed identical to ES2H atmosphere grid"
+      areacello: "MIROC-ES2L: ocean grid stated identical to ES2H"
+      sftlf:     "MIROC6: assumed identical to ES2H land-sea mask"
+    tables: {tas: Amon, pr: Amon, ts: Amon, siconc: Omon}
+    scenarios:
+      ssp245:                          # shared baseline for both SAI scenarios
+        path: "{root}/MIROC-ES2H/G6-1.5K-HiLLA/{table}/{file_var}_baseline_{member}.nc"
+      G6-1.5K-HiLLA:
+        path: "{root}/MIROC-ES2H/G6-1.5K-HiLLA/{table}/{file_var}_G6-1.5K-HiLLA_{member}.nc"
+      G6-1.5K-SAI:
+        path: "{root}/MIROC-ES2H/G6-1.5K-SAI/Mon/{file_var}_G6-1.5K-SAI_{member}.nc"
+        file_vars: {tas: SurfT, pr: P, siconc: SeaIce}
+        path_overrides:
+          ts: "{root}/MIROC-ES2H/G6-1.5K-SAI/Amon/ts_G6-1.5K-SAI_{member}.nc"
+
+  CESM2-WACCM:
+    members: [r1, r2, r3]
+    pairing: by_member_index
+    role_overrides: {sst: ts, seaice: siconca}   # ICEFRAC: atmosphere-grid ice fraction
+    member_labels: {r1: "001", r2: "002", r3: "003"}
+    file_vars: {tas: TREFHT, pr: PRECT, ts: TS, siconca: ICEFRAC}
+    unit_scale: {pr: 1000.0}                     # PRECT m/s -> kg m-2 s-1
+    time_fix: center_of_bounds                   # CAM h0 stamps at end of month
+    fx:
+      areacella: ~/shared/Data/model_grids_fx/areacella_fx_CESM2-WACCM_piControl_r1i1p1f1_gn.nc
+      areacello: ~/shared/Data/model_grids_fx/areacello_Ofx_CESM2-WACCM_piControl_r1i1p1f1_gn.nc
+      sftlf:     ~/shared/Data/model_grids_fx/sftlf_fx_CESM2-WACCM_hist-1950HC_r1i1p1f1_gn.nc
+    scenarios:
+      ssp245:                                    # ARISE public bucket; 001-003 parents of G6 r1-r3
+        anon: true
+        path: "s3://ncar-cesm2-arise/CESM2-WACCM-SSP245/b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.{member_label}/atm/proc/tseries/month_1/b.e21.BWSSP245cmip6.f09_g17.CMIP6-SSP2-4.5-WACCM.{member_label}.cam.h0.{file_var}.*.nc"
+      G6-1.5K-HiLLA:
+        path: "{root}/CESM2-WACCM/G6-1.5k-HiLLA/{member}/AMON/b.e21.BW.f09_g17.SSP245-G6-1p5K-HiLLA.{member_label}.cam.h0.{file_var}.*.nc"
+      G6-1.5K-SAI:
+        path: "{root}/CESM2-WACCM/G6-1.5k-SAI/{member}/AMON/b.e21.BW.f09_g17.SSP245-G6-1p5K-SAI.{member_label}.cam.h0.{file_var}.*.nc"
+      historical:                                # step 8 only; CMIP6 on AWS (pangeo)
+        anon: true
+        format: zarr
+        roles_used: [gmsat]
+        member_labels: {r1: r1i1p1f1, r2: r2i1p1f1, r3: r3i1p1f1}
+        file_vars: {tas: tas}
+        time_fix: none
+        path: "s3://cmip6-pds/CMIP6/CMIP/NCAR/CESM2-WACCM/historical/{member_label}/Amon/{file_var}/gn/v*"
+
+  E3SMv3:
+    status: not_configured                       # deferred
+
+# =====================================================================
+# Processing choices
+# =====================================================================
+choices:
+  # Relative Nino3.4 and tropical-mean SST on atmosphere-grid SST (ts):
+  # cells with sftlf == 0 ("strict") or sftlf < 50% ("majority").
+  # Ocean-grid SST (tos) uses every valid ocean cell.
+  ocean_mask: strict
+
+  # ENSO: standard Nino3.4 box; relative index = Nino3.4 minus the
+  # tropical-mean (20S-20N) ocean SST.
+  nino34_box: {lat: [-5, 5], lon: [190, 240]}
+  relative_nino34_band: {lat: [-20, 20]}
+
+  # Step 2 saves monthly series only; annual values are derived in step 3.
+  # Baseline case: GMSAT as calendar-year means (days-weighted), ENSO-adjusted
+  # with a lagged Nino3.4 regression. Alternatives (e.g. Oct-Sep years) are
+  # available via indices.annual_mean(start_month=...).
+  annualisation: calendar
+  complete_years_only: true
+  enso_adjustment: {method: lagged_regression, lag_months: null}   # lag: TBD in step 3
+
+  # Sea ice: Arctic (lat > 0) sea-ice area in September.
+  seaice: {hemisphere: north, month: 9}
+
+  # Indian summer monsoon: JJA-mean precip over the box, land cells only
+  # ("majority" = sftlf > 50%; "strict" = sftlf == 100%).
+  ism: {lat: [5, 40], lon: [60, 100], months: [6, 7, 8], land_mask: majority}
+
+  # Still to decide: enso_adjustment.lag_months, baseline_period (step 3)
