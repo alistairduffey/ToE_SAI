@@ -33,7 +33,8 @@ UNDECLARED_FILL_THRESHOLD = 1e19
 
 # Keys that may be set at model level and overridden per scenario
 MERGE_KEYS = ("member_labels", "file_vars", "tables", "unit_scale", "time_fix",
-              "anon", "format", "path", "path_overrides", "roles_used")
+              "anon", "format", "path", "path_overrides", "roles_used",
+              "pairing", "deployment_start")
 
 # ---------------------------------------------------------------------
 # Config
@@ -81,6 +82,31 @@ def scenario_spec(cfg: dict, model: str, scenario: str) -> dict | None:
         else:
             spec[k] = v
     return spec
+
+
+def scenario_setting(cfg: dict, model: str, scenario: str, key: str, default=None):
+    """A scenario setting: model/scenario level first, then the top-level scenario entry."""
+    spec = scenario_spec(cfg, model, scenario) or {}
+    if key in spec:
+        return spec[key]
+    return (cfg["scenarios"].get(scenario) or {}).get(key, default)
+
+
+def pairing(cfg: dict, model: str, scenario: str) -> str:
+    """'by_member_index' if SAI rN branched from baseline rN, else 'none'.
+    Only meaningful for scenarios with a baseline."""
+    if not (cfg["scenarios"].get(scenario) or {}).get("baseline"):
+        return "none"
+    return scenario_setting(cfg, model, scenario, "pairing", "none")
+
+
+def deployment_start(cfg: dict, model: str, scenario: str) -> int | None:
+    """First month of the SAI intervention as year*12 + month-1, or None."""
+    v = scenario_setting(cfg, model, scenario, "deployment_start")
+    if v is None:
+        return None
+    y, m = str(v).split("-")
+    return int(y) * 12 + int(m) - 1
 
 
 # ---------------------------------------------------------------------
@@ -211,11 +237,14 @@ def expected_files(cfg: dict, models=None, scenarios=None) -> pd.DataFrame:
                             time_fix=spec.get("time_fix", "none"),
                             unit_scale=float((spec.get("unit_scale") or {}).get(var, 1.0)),
                             grid_expected=variable_grid(cfg, model, var),
+                            pairing=pairing(cfg, model, scen),
+                            deployment_start=deployment_start(cfg, model, scen),
                         )
                     rows.append(row)
 
     cols = ["model", "scenario", "role", "var", "file_var", "member", "member_label",
-            "pattern", "anon", "format", "time_fix", "unit_scale", "grid_expected", "status"]
+            "pattern", "anon", "format", "time_fix", "unit_scale", "grid_expected",
+            "pairing", "deployment_start", "status"]
     return pd.DataFrame(rows).reindex(columns=cols)
 
 

@@ -36,10 +36,18 @@ run:
   models: [UKESM1-1, MIROC-ES2H, CESM2-WACCM, E3SMv3]
   scenarios: [ssp245, G6-1.5K-HiLLA, G6-1.5K-SAI, historical]
 
+# Scenarios.
+#   deployment_start: first month of the SAI intervention ("YYYY-MM"). Can differ from the
+#     first month of data (UKESM HiLLA branches in Jan 2034, deploys in Jan 2035).
+#     Overridable per model under models.<model>.scenarios.<scenario>.
+#   pairing (set per model, overridable per scenario):
+#     by_member_index  SAI rN branched from baseline rN (same initial state)
+#     none             not branched from these baseline runs: compare as independent
+#                      ensembles; exclude from anything needing a shared initial state
 scenarios:
   ssp245:        {kind: baseline}
-  G6-1.5K-HiLLA: {kind: sai, baseline: ssp245}
-  G6-1.5K-SAI:   {kind: sai, baseline: ssp245}
+  G6-1.5K-HiLLA: {kind: sai, baseline: ssp245, deployment_start: "2035-01"}
+  G6-1.5K-SAI:   {kind: sai, baseline: ssp245, deployment_start: "2035-01"}
   historical:    {kind: historical, used_in: [spatial], models: [CESM2-WACCM]}
 
 # Analysis role -> variable (overridable per model via role_overrides).
@@ -96,10 +104,14 @@ models:
         member_labels: {r1: r12i1p1f1, r2: r2i1p1f1, r3: r3i1p1f1}
         path: "{root}/UKESM1-1/SSP245/{member_label}/ap5/{table}/{file_var}/*.nc"
       G6-1.5K-HiLLA:
+        # branched from ssp245 rN in Jan 2034; intervention starts 2035-01 (deployment_start)
         member_labels: {r1: r12i1p1f2, r2: r2i1p1f2, r3: r3i1p1f2}
         path: "{root}/UKESM1-1/G6-1p5K-HiLLA/{member_label}/apm/{table}/{file_var}/*.nc"
       G6-1.5K-SAI:
-        member_labels: {r1: r12i1p1f2, r2: r2i1p1f2, r3: r3i1p1f2}   # r2, r3 assumed
+        # branched from an earlier set of simulations we don't have, NOT from these ssp245
+        # runs (confirmed by first-day sea-ice comparison against u-dp904/902/903)
+        pairing: none
+        member_labels: {r1: r12i1p1f2, r2: r2i1p1f2, r3: r3i1p1f2}   # labels identify files only
         path: "{root}/UKESM1-1/G6-1.5K-SAI/{member_label}/mon/{file_var}/*.nc"
 
   MIROC-ES2H:
